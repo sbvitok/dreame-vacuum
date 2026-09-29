@@ -809,13 +809,34 @@ class DreameVacuumDevice:
                 if "aiid" not in mapping and (not self._ready or prop.value in self.data):
                     property_list.append({"did": str(prop.value), **mapping})
 
+        def fetch(chunk):
+            # Firmware such as 4.3.9_3407 on dreame.vacuum.r2228o never replies to
+            # one 15-property get_properties (dids 45-59), while the same
+            # properties answer immediately in smaller groups. Split a failed
+            # batch until it succeeds. One property that still fails is a real
+            # timeout and is raised. A None result used to retry the same chunk
+            # forever because the loop only advanced after a non-None reply.
+            try:
+                result = self._protocol.get_properties(
+                    chunk, timeout=(10 if len(property_list) > 15 else None)
+                )
+            except Exception:
+                if len(chunk) == 1:
+                    raise
+                mid = len(chunk) // 2
+                return fetch(chunk[:mid]) + fetch(chunk[mid:])
+            if result is None:
+                if len(chunk) == 1:
+                    return []
+                mid = len(chunk) // 2
+                return fetch(chunk[:mid]) + fetch(chunk[mid:])
+            return result
+
         props = property_list.copy()
         results = []
         while props:
-            result = self._protocol.get_properties(props[:15], timeout=(10 if len(property_list) > 15 else None))
-            if result is not None:
-                results.extend(result)
-                props[:] = props[15:]
+            results.extend(fetch(props[:15]))
+            props[:] = props[15:]
 
         return self._handle_properties(results)
 
